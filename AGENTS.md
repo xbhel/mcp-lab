@@ -28,7 +28,6 @@
 - MUST read and understand the relevant documentation before making changes to ensure consistency and correctness in implementation
 - ONLY read the documentation that is relevant to the task at hand; avoid getting bogged down in unrelated details
 - MUST document todo items and open questions in the relevant ADRs and specifications, and link to them in the user guides for visibility
-- BEFORE opening a PR, MUST update *README.md* with a docs index and keep it in sync with any doc changes.
   
 ## Development
 

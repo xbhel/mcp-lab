@@ -1,0 +1,14 @@
+{
+	"servers": {
+		"http-adaptor": {
+            "type": "stdio",
+            "command": "uv",
+            "args": [
+                "run",
+                "http-adaptor",
+                "--transport",
+                "stdio"
+            ]
+        }
+	}
+}
