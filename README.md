@@ -29,20 +29,8 @@ The current scope is simple: turn existing HTTP APIs into MCP tools at runtime.
 cd mcp_servers/http_adaptor
 uv sync
 uv run http-adaptor --transport stdio   # local / VS Code
-uv run http-adaptor --transport http    # remote, default 127.0.0.1:8000
+uv run http-adaptor --transport sse    # remote, default 127.0.0.1:8000
 ```
-
-### Options
-
-| Flag | Default | Description |
-| --- | --- | --- |
-| `--config` | unset | Optional path to `config.toml` |
-| `--transport` | resolved from config precedence, built-in `stdio` | `stdio` or `http` |
-| `--host` | resolved from config precedence, built-in `127.0.0.1` | Bind host (HTTP transport only) |
-| `--port` | resolved from config precedence, built-in `8000` | Bind port (HTTP transport only) |
-| `--storage` | resolved from config precedence, built-in `~/.http_adaptor/tools.json` | Registry file path |
-| `--default-timeout-seconds` | resolved from config precedence, built-in `30.0` | App-level timeout default for tools that omit `timeout_seconds` |
-| `--default-retry-max-attempts` | resolved from config precedence, built-in `3` | App-level retry default for tools that omit `retry_max_attempts` |
 
 ### Configuration
 
