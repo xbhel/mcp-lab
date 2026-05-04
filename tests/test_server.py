@@ -5,12 +5,13 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import MagicMock
 
+import httpx
 import pytest
 from mcp.server.fastmcp import FastMCP
 
-import http_adaptor.server as server
-from http_adaptor.config import MCPConfig
-from http_adaptor.models import ToolDefinition
+import http2mcp.server as server
+from http2mcp.config import MCPConfig
+from http2mcp.models import ToolDefinition
 
 
 class _AsyncClientContext:
@@ -29,9 +30,9 @@ async def test_create_server_runtime_lifespan_should_setup_registry_dispatcher_a
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    app = cast(FastMCP, MagicMock(spec=FastMCP))
+    app = cast("FastMCP", MagicMock(spec=FastMCP))
     config = MCPConfig(
-        storage_path=tmp_path / "tools.json",
+        work_dir=tmp_path,
         transport="sse",
         host="127.0.0.10",
         port=8123,
@@ -47,37 +48,40 @@ async def test_create_server_runtime_lifespan_should_setup_registry_dispatcher_a
     registry.all.return_value = [persisted_tool]
     shared_client = object()
     dispatcher = object()
+    metrics = MagicMock()
     tool_registry_cls = MagicMock(return_value=registry)
     dispatcher_cls = MagicMock(return_value=dispatcher)
+    metrics_cls = MagicMock(return_value=metrics)
     register_mcp_tools = MagicMock()
-    add_dynamic_tool = MagicMock()
+    load_dynamic_tools = MagicMock()
 
     monkeypatch.setattr(server, "ToolRegistry", tool_registry_cls)
     monkeypatch.setattr(server, "HttpDispatcher", dispatcher_cls)
+    monkeypatch.setattr(server, "MetricsCollector", metrics_cls)
     monkeypatch.setattr(
-        server.httpx,
+        httpx,
         "AsyncClient",
         MagicMock(return_value=_AsyncClientContext(shared_client)),
     )
     monkeypatch.setattr(server, "register_mcp_tools", register_mcp_tools)
-
-    import http_adaptor.tools as tools
-
-    monkeypatch.setattr(tools, "_add_dynamic_tool", add_dynamic_tool)
+    monkeypatch.setattr(server, "load_dynamic_tools", load_dynamic_tools)
 
     lifespan = server.create_server_runtime(config=config)
 
     async with lifespan(app):
         pass
 
-    tool_registry_cls.assert_called_once_with(storage_path=config.storage_path)
+    metrics_cls.assert_called_once_with(config.metrics_storage_path)
+    metrics.load.assert_called_once_with(config.metrics_storage_path)
+    metrics.save.assert_called_once_with(config.metrics_storage_path)
+    tool_registry_cls.assert_called_once_with(storage_path=config.tools_storage_path)
     dispatcher_cls.assert_called_once_with(client=shared_client, config=config)
-    register_mcp_tools.assert_called_once()
-    add_dynamic_tool.assert_called_once_with(
+    register_mcp_tools.assert_called_once_with(app, registry, dispatcher, metrics)
+    load_dynamic_tools.assert_called_once_with(
         app,
-        persisted_tool,
+        registry,
         dispatcher,
-        register_mcp_tools.call_args.args[3],
+        metrics,
     )
 
 
@@ -86,7 +90,7 @@ def test_create_app_should_create_fastmcp_with_correct_host_and_port(
     tmp_path: Path,
 ) -> None:
     config = MCPConfig(
-        storage_path=tmp_path / "tools.json",
+        work_dir=tmp_path,
         transport="sse",
         host="127.0.0.2",
         port=9100,
@@ -117,22 +121,23 @@ async def test_create_server_runtime_lifespan_should_log_shutdown_after_client_c
     tmp_path: Path,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    app = cast(FastMCP, MagicMock(spec=FastMCP))
-    config = MCPConfig(storage_path=tmp_path / "tools.json")
+    app = cast("FastMCP", MagicMock(spec=FastMCP))
+    config = MCPConfig(work_dir=tmp_path)
 
+    monkeypatch.setattr(server, "MetricsCollector", MagicMock(return_value=MagicMock()))
     monkeypatch.setattr(server, "ToolRegistry", MagicMock())
     monkeypatch.setattr(server, "HttpDispatcher", MagicMock())
     monkeypatch.setattr(server, "register_mcp_tools", MagicMock())
     monkeypatch.setattr(server, "load_dynamic_tools", MagicMock())
     monkeypatch.setattr(
-        server.httpx,
+        httpx,
         "AsyncClient",
         MagicMock(return_value=_AsyncClientContext(object())),
     )
 
     lifespan = server.create_server_runtime(config=config)
 
-    with caplog.at_level(logging.INFO, logger="http_gateway"):
+    with caplog.at_level(logging.INFO, logger="http2mcp"):
         async with lifespan(app):
             pass
 

@@ -10,8 +10,8 @@ import json
 import tempfile
 from pathlib import Path
 
-from http_adaptor.exceptions import DuplicateToolError, ToolNotFoundError
-from http_adaptor.models import PaginatedToolList, ToolDefinition
+from http2mcp.exceptions import DuplicateToolError, ToolNotFoundError
+from http2mcp.models import PaginatedToolList, ToolDefinition
 
 
 class ToolRegistry:

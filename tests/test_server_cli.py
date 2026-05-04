@@ -5,8 +5,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import http_adaptor.server as server
-from http_adaptor.config import MCPConfig
+import http2mcp.server as server
+from http2mcp.config import MCPConfig
 
 
 def test_main_should_run_sse_when_transport_is_sse(

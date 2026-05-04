@@ -21,10 +21,19 @@ from tenacity import (
     wait_exponential,
 )
 
-from http_adaptor.models import InvokeResult, ToolDefinition
+from http2mcp._internal_utils import substitute_env_vars
+from http2mcp.models import InvokeResult, ToolDefinition
 
 if TYPE_CHECKING:
-    from http_adaptor.config import MCPConfig
+    from http2mcp.config import MCPConfig
+
+
+def _resolve_header_secrets(headers: dict[str, str]) -> dict[str, str]:
+    """Expand ${VAR_NAME} placeholders in header values from environment variables.
+
+    Placeholders that reference an unset variable are left unchanged.
+    """
+    return substitute_env_vars(headers, strict=False)  # type: ignore[no-any-return]
 
 
 def _build_llm_error(exc: Exception) -> str:
@@ -34,8 +43,10 @@ def _build_llm_error(exc: Exception) -> str:
             "Request timed out. The remote API did not respond in time. "
             "Please retry or check the service."
         )
+
     if isinstance(exc, httpx.ConnectError):
         return f"Could not connect to the remote API: {exc}. Check the URL and network."
+
     if isinstance(exc, httpx.HTTPStatusError):
         code = exc.response.status_code
         messages = {
@@ -49,6 +60,7 @@ def _build_llm_error(exc: Exception) -> str:
             503: "Service unavailable — the remote API is temporarily down.",
         }
         return messages.get(code, f"HTTP {code} error from the remote API.")
+
     return f"Unexpected error: {type(exc).__name__}: {exc}"
 
 
@@ -78,7 +90,7 @@ def _parse_body(response: httpx.Response) -> str | dict[str, Any]:
     return response.text
 
 
-class _ServerError(Exception):
+class _RetryableError(Exception):
     """Raised when the remote API returns a 5xx response.
 
     Signals tenacity to schedule a retry. The embedded result holds the last
@@ -142,7 +154,7 @@ class HttpDispatcher:
         try:
             async for attempt in AsyncRetrying(
                 retry=retry_if_exception_type(
-                    (_ServerError, httpx.TimeoutException, httpx.ConnectError)
+                    (_RetryableError, httpx.TimeoutException, httpx.ConnectError)
                 ),
                 stop=stop_after_attempt(self._effective_retry_max_attempts(tool)),
                 wait=wait_exponential(multiplier=tool.retry_backoff_seconds, min=0.1, max=30.0),
@@ -150,11 +162,9 @@ class HttpDispatcher:
             ):
                 with attempt:
                     last_attempt = attempt.retry_state.attempt_number
-                    result = await self._send_request(tool, params)
-                    return result.model_copy(update={"retries": last_attempt - 1})
-        except _ServerError as exc:
-            retries = last_attempt - 1
-            return exc.result.model_copy(update={"retries": retries})
+                    return await self._send_request(tool, params, last_attempt - 1)
+        except _RetryableError as exc:
+            return exc.result
         except (httpx.TimeoutException, httpx.ConnectError) as exc:
             return InvokeResult(
                 tool_name=tool.name,
@@ -167,19 +177,16 @@ class HttpDispatcher:
         raise AssertionError("unreachable")  # pragma: no cover
 
     async def _send_request(
-        self,
-        tool: ToolDefinition,
-        params: dict[str, Any],
+        self, tool: ToolDefinition, params: dict[str, Any], retries: int
     ) -> InvokeResult:
         """Execute a single HTTP request and return a structured result.
 
-        Raises _ServerError on 5xx so tenacity can schedule a retry.
+        Raises _RetryableError on 5xx so tenacity can schedule a retry.
         4xx responses are returned directly without retry.
-        retries is always 0 here — _dispatch stamps the final count.
         """
         start = time.perf_counter()
         method = tool.method.upper()
-        kwargs: dict[str, Any] = {"headers": tool.headers}
+        kwargs: dict[str, Any] = {"headers": _resolve_header_secrets(tool.headers)}
 
         if method in ("GET", "HEAD", "DELETE"):
             kwargs["params"] = params
@@ -195,17 +202,18 @@ class HttpDispatcher:
         latency_ms = (time.perf_counter() - start) * 1000
         body = _parse_body(response)
 
-        if response.status_code >= 500:
+        if response.status_code >= 500 or response.status_code == 429:
             error_msg = _build_llm_error(
                 httpx.HTTPStatusError(message="", request=response.request, response=response)
             )
-            raise _ServerError(
+            raise _RetryableError(
                 InvokeResult(
                     tool_name=tool.name,
                     status_code=response.status_code,
                     body=body,
                     latency_ms=latency_ms,
                     error=error_msg,
+                    retries=retries,
                 )
             )
 
@@ -219,6 +227,7 @@ class HttpDispatcher:
                 body=body,
                 latency_ms=latency_ms,
                 error=error_msg,
+                retries=retries,
             )
 
         return InvokeResult(
@@ -226,4 +235,5 @@ class HttpDispatcher:
             status_code=response.status_code,
             body=body,
             latency_ms=latency_ms,
+            retries=retries,
         )

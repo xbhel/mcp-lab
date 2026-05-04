@@ -8,9 +8,9 @@ from typing import Any
 import pytest
 import yaml
 
-from http_adaptor.exceptions import InvalidOpenAPISpecError
-from http_adaptor.models import ToolDefinition
-from http_adaptor.openapi import (
+from http2mcp.exceptions import InvalidOpenAPISpecError
+from http2mcp.models import ToolDefinition
+from http2mcp.openapi import (
     _build_input_schema,
     _extract_base_url,
     _parse_spec,

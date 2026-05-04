@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
-from http_adaptor.metrics import MetricsCollector
-from http_adaptor.models import MetricEntry
+from http2mcp.metrics import MetricsCollector
+from http2mcp.models import MetricEntry
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -13,8 +15,8 @@ from http_adaptor.models import MetricEntry
 
 
 @pytest.fixture
-def collector() -> MetricsCollector:
-    return MetricsCollector()
+def collector(tmp_path: Path) -> MetricsCollector:
+    return MetricsCollector(tmp_path / "metrics.json")
 
 
 # ---------------------------------------------------------------------------
@@ -132,3 +134,51 @@ def test_p95_latency_should_return_correct_percentile() -> None:
     entry = MetricEntry(tool_name="t", latency_samples=list(range(1, 101)))
     # 95th percentile of 1..100 is 95
     assert entry.p95_latency_ms == 95.0
+
+
+# ---------------------------------------------------------------------------
+# T-01: persistence (save / load)
+# ---------------------------------------------------------------------------
+
+
+def test_save_should_write_metrics_to_json_file(
+    collector: MetricsCollector, tmp_path
+) -> None:
+    collector.record_call("tool_a", latency_ms=10.0, success=True)
+    collector.record_call("tool_b", latency_ms=5.0, success=False)
+
+    path = tmp_path / "metrics.json"
+    collector.save(path)
+
+    assert path.exists()
+    import json
+    data = json.loads(path.read_text())
+    assert "tool_a" in data
+    assert "tool_b" in data
+    assert data["tool_a"]["call_count"] == 1
+
+
+def test_load_should_restore_metrics_from_json_file(
+    collector: MetricsCollector, tmp_path
+) -> None:
+    collector.record_call("tool_a", latency_ms=20.0, success=True)
+    collector.record_call("tool_a", latency_ms=30.0, success=True)
+    path = tmp_path / "metrics.json"
+    collector.save(path)
+
+    fresh = MetricsCollector(path)
+    fresh.load(path)
+
+    entry = fresh.get("tool_a")
+    assert entry is not None
+    assert entry.call_count == 2
+    assert entry.success_count == 2
+
+
+def test_load_should_be_a_no_op_when_file_does_not_exist(
+    tmp_path,
+) -> None:
+    missing_path = tmp_path / "missing.json"
+    fresh = MetricsCollector(missing_path)
+    fresh.load(missing_path)
+    assert fresh.all_metrics() == {}

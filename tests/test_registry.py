@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from http_adaptor.exceptions import DuplicateToolError, ToolNotFoundError
-from http_adaptor.models import ToolDefinition
-from http_adaptor.registry import ToolRegistry
+from http2mcp.exceptions import DuplicateToolError, ToolNotFoundError
+from http2mcp.models import ToolDefinition
+from http2mcp.registry import ToolRegistry
 
 # ---------------------------------------------------------------------------
 # Fixtures

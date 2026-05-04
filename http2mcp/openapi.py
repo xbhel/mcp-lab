@@ -17,8 +17,8 @@ from urllib.parse import urljoin, urlparse
 
 import yaml
 
-from http_adaptor.exceptions import InvalidOpenAPISpecError
-from http_adaptor.models import ToolDefinition
+from http2mcp.exceptions import InvalidOpenAPISpecError
+from http2mcp.models import HttpMethod, ToolDefinition
 
 # ---------------------------------------------------------------------------
 # Import
@@ -59,7 +59,7 @@ def import_tools_from_openapi(
     tools: list[ToolDefinition] = []
     for path_str, path_item in spec.get("paths", {}).items():
         for method, operation in path_item.items():
-            if method.upper() not in ("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"):
+            if method.upper() not in HttpMethod.__members__:
                 continue
             if not isinstance(operation, dict):
                 continue
@@ -103,8 +103,8 @@ def import_tools_from_openapi(
 def export_tools_as_openapi(
     tools: list[ToolDefinition],
     *,
-    base_url: str = "https://gateway.localhost",
-    title: str = "http-adaptor MCP Tools",
+    base_url: str = "https://localhost",
+    title: str = "http2mcp MCP Tools",
     version: str = "1.0.0",
 ) -> dict[str, Any]:
     """Export registered tools as an OpenAPI 3.1 spec dict.
