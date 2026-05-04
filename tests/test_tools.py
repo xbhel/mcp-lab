@@ -9,12 +9,12 @@ from unittest.mock import AsyncMock, MagicMock
 import httpx
 import pytest
 
-from http_adaptor.config import MCPConfig
-from http_adaptor.http_client import HttpDispatcher
-from http_adaptor.metrics import MetricsCollector
-from http_adaptor.models import InvokeResult, ToolDefinition
-from http_adaptor.registry import ToolRegistry
-from http_adaptor.tools import register_mcp_tools
+from http2mcp.config import MCPConfig
+from http2mcp.http_client import HttpDispatcher
+from http2mcp.metrics import MetricsCollector
+from http2mcp.models import InvokeResult, ToolDefinition
+from http2mcp.registry import ToolRegistry
+from http2mcp.tools import register_mcp_tools
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -37,20 +37,21 @@ def dispatcher() -> HttpDispatcher:
 
 
 @pytest.fixture
-def metrics() -> MetricsCollector:
-    return MetricsCollector()
+def metrics(tmp_path: Path) -> MetricsCollector:
+    return MetricsCollector(tmp_path / "metrics.json")
 
 
 @pytest.fixture
 def mock_mcp():
     """Minimal FastMCP stub that captures registered tools."""
     mock = MagicMock()
-    mock._registered_tools: dict = {} # type: ignore
+    mock._registered_tools = {}
 
     def tool_decorator(**kwargs):
         def decorator(fn):
             mock._registered_tools[kwargs.get("name", fn.__name__)] = fn
             return fn
+
         return decorator
 
     mock.tool = tool_decorator
@@ -59,7 +60,7 @@ def mock_mcp():
 
 
 # ---------------------------------------------------------------------------
-# adaptor_register_tool
+# http2mcp_register_tool
 # ---------------------------------------------------------------------------
 
 
@@ -71,9 +72,10 @@ async def test_register_tool_should_persist_and_return_success(
     mock_mcp,
 ) -> None:
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_register_tool"]
+    handler = mock_mcp._registered_tools["http2mcp_register_tool"]
 
-    from http_adaptor.tools import RegisterToolInput
+    from http2mcp.models import RegisterToolInput
+
     params = RegisterToolInput(
         name="test_get_v1",
         description="Test GET endpoint",
@@ -95,9 +97,10 @@ async def test_register_tool_should_preserve_timeout_and_retry_omission_when_omi
     mock_mcp,
 ) -> None:
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_register_tool"]
+    handler = mock_mcp._registered_tools["http2mcp_register_tool"]
 
-    from http_adaptor.tools import RegisterToolInput
+    from http2mcp.models import RegisterToolInput
+
     params = RegisterToolInput(
         name="defaults_test_v1",
         description="Defaults test",
@@ -122,9 +125,10 @@ async def test_register_tool_should_return_error_on_duplicate(
     mock_mcp,
 ) -> None:
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_register_tool"]
+    handler = mock_mcp._registered_tools["http2mcp_register_tool"]
 
-    from http_adaptor.tools import RegisterToolInput
+    from http2mcp.models import RegisterToolInput
+
     params = RegisterToolInput(
         name="test_get_v1",
         description="Test",
@@ -147,9 +151,9 @@ async def test_register_tool_should_return_error_when_registry_write_fails(
     broken_registry.register.side_effect = RuntimeError("disk full")
 
     register_mcp_tools(mock_mcp, broken_registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_register_tool"]
+    handler = mock_mcp._registered_tools["http2mcp_register_tool"]
 
-    from http_adaptor.tools import RegisterToolInput
+    from http2mcp.models import RegisterToolInput
 
     result = await handler(
         RegisterToolInput(
@@ -165,7 +169,7 @@ async def test_register_tool_should_return_error_when_registry_write_fails(
 
 
 # ---------------------------------------------------------------------------
-# adaptor_delete_tool
+# http2mcp_delete_tool
 # ---------------------------------------------------------------------------
 
 
@@ -184,9 +188,10 @@ async def test_delete_tool_should_remove_tool_and_return_success(
         )
     )
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_delete_tool"]
+    handler = mock_mcp._registered_tools["http2mcp_delete_tool"]
 
-    from http_adaptor.tools import DeleteToolInput
+    from http2mcp.models import DeleteToolInput
+
     result = await handler(DeleteToolInput(name="to_delete_v1"))
     data = json.loads(result)
     assert data["success"] is True
@@ -202,16 +207,17 @@ async def test_delete_tool_should_return_error_when_not_found(
     mock_mcp,
 ) -> None:
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_delete_tool"]
+    handler = mock_mcp._registered_tools["http2mcp_delete_tool"]
 
-    from http_adaptor.tools import DeleteToolInput
+    from http2mcp.models import DeleteToolInput
+
     result = await handler(DeleteToolInput(name="nonexistent"))
     data = json.loads(result)
     assert data["success"] is False
 
 
 # ---------------------------------------------------------------------------
-# adaptor_list_tools
+# http2mcp_list_tools
 # ---------------------------------------------------------------------------
 
 
@@ -231,9 +237,10 @@ async def test_list_tools_should_return_registered_tools(
         )
     )
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_list_tools"]
+    handler = mock_mcp._registered_tools["http2mcp_list_tools"]
 
-    from http_adaptor.tools import ListToolsInput
+    from http2mcp.models import ListToolsInput
+
     result = await handler(ListToolsInput())
     data = json.loads(result)
     assert data["total"] == 1
@@ -258,16 +265,17 @@ async def test_list_tools_should_include_call_count_from_metrics(
     metrics.record_call("my_api_v1", latency_ms=200.0, success=False)
 
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_list_tools"]
+    handler = mock_mcp._registered_tools["http2mcp_list_tools"]
 
-    from http_adaptor.tools import ListToolsInput
+    from http2mcp.models import ListToolsInput
+
     result = await handler(ListToolsInput())
     data = json.loads(result)
     assert data["items"][0]["call_count"] == 2
 
 
 # ---------------------------------------------------------------------------
-# adaptor_get_metrics
+# http2mcp_get_metrics
 # ---------------------------------------------------------------------------
 
 
@@ -282,7 +290,7 @@ async def test_get_metrics_should_return_per_tool_stats(
     metrics.record_call("tool_x", latency_ms=150.0, success=False)
 
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_get_metrics"]
+    handler = mock_mcp._registered_tools["http2mcp_get_metrics"]
 
     result = await handler()
     data = json.loads(result)
@@ -293,7 +301,7 @@ async def test_get_metrics_should_return_per_tool_stats(
 
 
 # ---------------------------------------------------------------------------
-# adaptor_import_openapi
+# http2mcp_import_openapi
 # ---------------------------------------------------------------------------
 
 
@@ -325,9 +333,10 @@ async def test_import_openapi_should_register_tools_from_valid_spec(
     spec_file.write_text(json_mod.dumps(spec))
 
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_import_openapi"]
+    handler = mock_mcp._registered_tools["http2mcp_import_openapi"]
 
-    from http_adaptor.tools import ImportOpenAPIInput
+    from http2mcp.models import ImportOpenAPIInput
+
     result = await handler(ImportOpenAPIInput(spec_path=str(spec_file)))
     data = json.loads(result)
     assert data["success"] is True
@@ -343,9 +352,10 @@ async def test_import_openapi_should_return_error_on_missing_file(
     mock_mcp,
 ) -> None:
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_import_openapi"]
+    handler = mock_mcp._registered_tools["http2mcp_import_openapi"]
 
-    from http_adaptor.tools import ImportOpenAPIInput
+    from http2mcp.models import ImportOpenAPIInput
+
     result = await handler(ImportOpenAPIInput(spec_path="/nonexistent/spec.json"))
     data = json.loads(result)
     assert data["success"] is False
@@ -379,9 +389,9 @@ async def test_import_openapi_should_collect_failed_tools_when_registry_write_fa
     broken_registry.register.side_effect = RuntimeError("write failed")
 
     register_mcp_tools(mock_mcp, broken_registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_import_openapi"]
+    handler = mock_mcp._registered_tools["http2mcp_import_openapi"]
 
-    from http_adaptor.tools import ImportOpenAPIInput
+    from http2mcp.models import ImportOpenAPIInput
 
     result = await handler(ImportOpenAPIInput(spec_path=str(spec_file)))
 
@@ -395,13 +405,14 @@ async def test_import_openapi_should_collect_failed_tools_when_registry_write_fa
 @pytest.mark.asyncio
 async def test_load_dynamic_tools_should_register_each_persisted_tool(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    import http_adaptor.tools as tools_module
+    import http2mcp.tools as tools_module
 
     mcp = MagicMock()
     registry = MagicMock()
     dispatcher = MagicMock()
-    metrics = MetricsCollector()
+    metrics = MetricsCollector(tmp_path / "metrics.json")
     persisted_tools = [
         ToolDefinition(
             name="weather_lookup",
@@ -427,8 +438,10 @@ async def test_load_dynamic_tools_should_register_each_persisted_tool(
 
 
 @pytest.mark.asyncio
-async def test_add_dynamic_tool_should_return_success_payload_and_record_metrics() -> None:
-    import http_adaptor.tools as tools_module
+async def test_add_dynamic_tool_should_return_success_payload_and_record_metrics(
+    tmp_path: Path,
+) -> None:
+    import http2mcp.tools as tools_module
 
     mcp = MagicMock()
     dispatcher = MagicMock()
@@ -441,7 +454,7 @@ async def test_add_dynamic_tool_should_return_success_payload_and_record_metrics
             retries=1,
         )
     )
-    metrics = MetricsCollector()
+    metrics = MetricsCollector(tmp_path / "metrics.json")
     tool = ToolDefinition(
         name="weather_lookup",
         description="Weather lookup",
@@ -468,8 +481,10 @@ async def test_add_dynamic_tool_should_return_success_payload_and_record_metrics
 
 
 @pytest.mark.asyncio
-async def test_add_dynamic_tool_should_return_error_payload_and_record_failure_metrics() -> None:
-    import http_adaptor.tools as tools_module
+async def test_add_dynamic_tool_should_return_error_payload_and_record_failure_metrics(
+    tmp_path: Path,
+) -> None:
+    import http2mcp.tools as tools_module
 
     mcp = MagicMock()
     dispatcher = MagicMock()
@@ -483,7 +498,7 @@ async def test_add_dynamic_tool_should_return_error_payload_and_record_failure_m
             error="Service unavailable",
         )
     )
-    metrics = MetricsCollector()
+    metrics = MetricsCollector(tmp_path / "metrics.json")
     tool = ToolDefinition(
         name="weather_lookup",
         description="Weather lookup",
@@ -509,7 +524,7 @@ async def test_add_dynamic_tool_should_return_error_payload_and_record_failure_m
 
 
 # ---------------------------------------------------------------------------
-# adaptor_export_openapi
+# http2mcp_export_openapi
 # ---------------------------------------------------------------------------
 
 
@@ -528,9 +543,10 @@ async def test_export_openapi_should_include_all_registered_tools(
         )
     )
     register_mcp_tools(mock_mcp, registry, dispatcher, metrics)
-    handler = mock_mcp._registered_tools["adaptor_export_openapi"]
+    handler = mock_mcp._registered_tools["http2mcp_export_openapi"]
 
-    from http_adaptor.tools import ExportOpenAPIInput
+    from http2mcp.models import ExportOpenAPIInput
+
     result = await handler(ExportOpenAPIInput())
     spec = json.loads(result)
     assert spec["openapi"].startswith("3.")

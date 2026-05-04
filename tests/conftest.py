@@ -1,4 +1,4 @@
-# Shared test fixtures for http_adaptor tests
+# Shared test fixtures for http2mcp tests
 import pytest
 
 

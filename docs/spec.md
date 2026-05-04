@@ -2,7 +2,7 @@
 
 **Version:** 0.1.0  
 **Status:** Phase 1 HTTP-to-MCP server — Active Development  
-**Source:** [mcp_servers/http_adaptor/](../../mcp_servers/http_adaptor/)  
+**Source:** [http2mcp](../http2mcp)  
 **Guide:** [guide.md](./guide.md)  
 **Draft:** [draft.md](./draft.md)
 
@@ -10,41 +10,40 @@
 
 ## Audience
 
-This specification is for implementers, contributors, and reviewers who need the authoritative description of what `http-adaptor` does and how its behavior is defined. For day-to-day usage, start with the [guide](./guide.md).
+This specification is for implementers, contributors, and reviewers who need the authoritative description of what `http2mcp` does and how its behavior is defined. For day-to-day usage, start with the [guide](./guide.md).
 
 ---
 
 ## 1. Purpose
 
-`http-adaptor` is an MCP server that acts as a bridge between LLMs and existing HTTP APIs. It lets users register any HTTP endpoint as an MCP tool at runtime — no code changes needed. The LLM can then discover and call those tools directly.
+`http2mcp` is an MCP server that acts as a bridge between LLMs and existing HTTP APIs. It lets users register any HTTP endpoint as an MCP tool at runtime — no code changes needed. The LLM can then discover and call those tools directly.
 
 **Scope:** turn existing HTTP APIs into MCP tools at runtime.
 
 ### 1.1 Naming and scope
 
-- `http-adaptor` is the server documented in this repository.
-- `http-adaptor-mcp` is the published Python package name.
-- `http_adaptor_mcp` is the FastMCP runtime identifier used by the server.
+- `http2mcp` is the server documented in this repository.
+- `http2mcp_mcp` is the FastMCP runtime identifier used by the server.
 
 This specification documents the current implemented server only.
 
 ### 1.2 Capability status
 
-| Capability | Status in v0.1.0 | Notes |
-| --- | --- | --- |
-| Register a new HTTP API as an MCP tool | Implemented | `adaptor_register_tool` |
-| Delete a registered tool | Implemented | `adaptor_delete_tool` |
-| List tools with discovery metadata | Implemented | `adaptor_list_tools` with pagination and tag filtering |
-| Group tools by user-defined tags | Implemented | Grouping is tag-based rather than separate group objects |
-| Invoke registered APIs through MCP | Implemented | Dynamic tools are exposed by their registered names |
-| Metrics and monitoring | Implemented with limits | Metrics are in memory only and reset on restart |
-| Structured invocation logs | Planned | Not implemented in Phase 1 |
-| JSON Schema-based input and output definitions | Implemented | Input validation is enforced before dispatch |
-| OpenAPI import and export | Implemented | Import supports OpenAPI 3.x; export emits OpenAPI 3.1 |
-| Friendly validation and error handling | Implemented | LLM-friendly messages for validation, HTTP, and network failures |
-| Retry on transient failures | Implemented | Network errors and HTTP 5xx are retried; HTTP 4xx are not |
-| Tool version management | Partially implemented | Supported through naming conventions such as `tool_v2`; no dedicated update/version API |
-| Access control on tool invocation | Planned | `api_key_hash` exists in the model but is not enforced yet |
+| Capability                                     | Status in v0.1.0        | Notes                                                                                   |
+| ---------------------------------------------- | ----------------------- | --------------------------------------------------------------------------------------- |
+| Register a new HTTP API as an MCP tool         | Implemented             | `http2mcp_register_tool`                                                                |
+| Delete a registered tool                       | Implemented             | `http2mcp_delete_tool`                                                                  |
+| List tools with discovery metadata             | Implemented             | `http2mcp_list_tools` with pagination and tag filtering                                 |
+| Group tools by user-defined tags               | Implemented             | Grouping is tag-based rather than separate group objects                                |
+| Invoke registered APIs through MCP             | Implemented             | Dynamic tools are exposed by their registered names                                     |
+| Metrics and monitoring                         | Implemented with limits | Metrics are persisted to `metrics.json` on graceful shutdown and reloaded on startup     |
+| Structured invocation logs                     | Planned                 | Not implemented in Phase 1                                                              |
+| JSON Schema-based input and output definitions | Implemented             | Input validation is enforced before dispatch                                            |
+| OpenAPI import and export                      | Implemented             | Import supports OpenAPI 3.x; export emits OpenAPI 3.1                                   |
+| Friendly validation and error handling         | Implemented             | LLM-friendly messages for validation, HTTP, and network failures                        |
+| Retry on transient failures                    | Implemented             | Network errors and HTTP 5xx are retried; HTTP 4xx are not                               |
+| Tool version management                        | Partially implemented   | Supported through naming conventions such as `tool_v2`; there is no public `http2mcp_update_tool` |
+| Access control on tool invocation              | Planned                 | `api_key_hash` exists on the model, but MCP registration inputs and invocation-time checks are not implemented |
 
 ---
 
@@ -83,54 +82,63 @@ flowchart TD
 
 ### Module responsibilities
 
-| Module             | Responsibility                                              |
-| ------------------ | ----------------------------------------------------------- |
-| `server.py`        | FastMCP app factory, CLI entry point, and `ServerRuntime` lifecycle coordinator |
-| `tools.py`         | All `@mcp.tool` handlers + dynamic tool registration        |
-| `registry.py`      | In-memory CRUD store backed by atomic JSON file             |
-| `http_client.py`   | HTTP dispatch, JSON Schema validation, retry, LLM errors    |
-| `openapi.py`       | OpenAPI 3.x import (file → tools) and export (tools → spec) |
-| `metrics.py`       | In-memory per-tool call counters and latency tracking       |
-| `models.py`        | Shared Pydantic v2 domain models                            |
+| Module           | Responsibility                                                                  |
+| ---------------- | ------------------------------------------------------------------------------- |
+| `server.py`      | FastMCP app factory, CLI entry point, and `ServerRuntime` lifecycle coordinator |
+| `tools.py`       | All `@mcp.tool` handlers + dynamic tool registration                            |
+| `registry.py`    | In-memory CRUD store backed by atomic JSON file                                 |
+| `http_client.py` | HTTP dispatch, JSON Schema validation, retry, LLM errors                        |
+| `openapi.py`     | OpenAPI 3.x import (file → tools) and export (tools → spec)                     |
+| `metrics.py`     | In-memory per-tool call counters and latency tracking                           |
+| `models.py`      | Shared Pydantic v2 domain models                                                |
 
 ### Runtime lifecycle
 
-`server.py` exports a default module-level `mcp` instance built with the default configuration for import-based tooling.
+`create_app(config)` constructs a configured `FastMCP` application from the resolved `MCPConfig`.
 
-`create_app()` still constructs configured `FastMCP` instances and binds one `ServerRuntime` object to each app.
+Each app binds a lifecycle created by `create_server_runtime(config)`, which initializes shared server resources during startup, including:
+
+- `MetricsCollector`
+- `ToolRegistry`
+- `httpx.AsyncClient`
+- `HttpDispatcher`
+
+During startup:
+
+- one shared `httpx.AsyncClient` for connection reuse across tool calls
+- one `MetricsCollector` loaded from the configured `metrics.json` path
+- one `ToolRegistry` bound to the configured storage path
+- registration of built-in `http2mcp_*` management tools
+- loading of persisted dynamic tools at startup
+
+All resources are scoped to the app lifespan and cleaned up automatically on shutdown.
+On graceful shutdown, the runtime writes the current metrics snapshot back to `metrics.json`.
 
 ### Runtime configuration
 
-The server resolves one flat runtime configuration before building the FastMCP app.
+The server resolves the runtime configuration from the config file before constructing the `FastMCP` app.
 
 The effective config includes:
 
-- `storage_path`
-- `transport`
-- `host`
-- `port`
-- `timeout_seconds`
-- `retry_max_attempts`
+```toml
+[mcp]
+work_dir = "~/.http2mcp" # Base directory for tools.json and metrics.json
+transport = "stdio"  # "stdio" or "sse"
+host = "127.0.0.1" # Only for "sse" transport
+port = 8000 # Only for "sse" transport
+timeout_seconds = 45.0 # Default timeout for HTTP calls (can be overridden per tool)
+retry_max_attempts = 5 # Default max retry attempts for failed HTTP calls (can be overridden per tool)
+```
 
 Resolution order:
 
-1. explicit CLI flags or `create_app(...)` arguments
-2. environment variables
-3. config file values
-4. built-in defaults
+1. explicit CLI flags
+2. config file values
+3. built-in defaults
 
-Default config file path: `~/.http_adaptor/config.toml`
+String values may reference environment variables using `${VAR_NAME}`, which are expanded before TOML parsing.
 
-The preferred config file shape is flat top-level keys. String values may reference environment variables using `${VAR_NAME}` and those placeholders are expanded before TOML parsing.
-
-`ServerRuntime` owns the dependencies that should live for the lifetime of that app instance:
-
-- one shared `httpx.AsyncClient` for connection reuse across tool calls
-- one `ToolRegistry` bound to the configured storage path
-- registration of built-in `adaptor_*` management tools
-- loading of persisted dynamic tools at startup
-
-This keeps runtime-owned dependencies instance-scoped while still exposing a default importable app object for tooling that expects one.
+The registry file is resolved as `<work_dir>/tools.json`, and metrics are resolved as `<work_dir>/metrics.json`.
 
 ---
 
@@ -140,22 +148,22 @@ This keeps runtime-owned dependencies instance-scoped while still exposing a def
 
 The canonical definition of a registered HTTP API tool. Persisted to `tools.json`.
 
-| Field                   | Type             | Default   | Constraints                                 | Description                                                          |
-| ----------------------- | ---------------- | --------- | ------------------------------------------- | -------------------------------------------------------------------- |
-| `name`                  | `str`            | required  | `^[a-z][a-z0-9_]*$`, 1–128 chars            | Unique MCP tool name in snake_case                                   |
-| `description`           | `str`            | required  | 1–1024 chars                                | Human-readable description for LLMs                                  |
-| `url`                   | `str`            | required  | `http://` or `https://` prefix              | Target HTTP endpoint                                                 |
-| `method`                | `str`            | `"GET"`   | One of: GET, POST, PUT, PATCH, DELETE, HEAD | HTTP method                                                          |
-| `headers`               | `dict[str, str]` | `{}`      | —                                           | Static request headers                                               |
-| `tags`                  | `list[str]`      | `[]`      | max 20 items                                | User-defined tags for grouping                                       |
-| `input_schema`          | `dict \| None`   | `None`    | Valid JSON Schema object                    | Validates input params before dispatch                               |
-| `output_schema`         | `dict \| None`   | `None`    | Valid JSON Schema object                    | Describes expected response shape                                    |
-| `api_key_hash`          | `str \| None`    | `None`    | bcrypt hash                                 | Reserved for future access control                                   |
-| `retry_max_attempts`    | `int \| None`   | `None`    | 1–10 when set                               | Max retries on transient failures; uses app default when omitted     |
-| `retry_backoff_seconds` | `float`          | `1.0`     | 0 < x ≤ 60                                  | Initial backoff for exponential retry                                |
-| `timeout_seconds`       | `float \| None` | `None`    | 0 < x ≤ 300 when set                        | Per-request timeout; uses app default when omitted                   |
-| `created_at`            | `datetime`       | now (UTC) | —                                           | Registration timestamp                                               |
-| `updated_at`            | `datetime`       | now (UTC) | —                                           | Last update timestamp                                                |
+| Field                   | Type             | Default   | Constraints                                 | Description                                                      |
+| ----------------------- | ---------------- | --------- | ------------------------------------------- | ---------------------------------------------------------------- |
+| `name`                  | `str`            | required  | `^[a-z][a-z0-9_]*$`, 1–128 chars            | Unique MCP tool name in snake_case                               |
+| `description`           | `str`            | required  | 1–1024 chars                                | Human-readable description for LLMs                              |
+| `url`                   | `str`            | required  | `http://` or `https://` prefix              | Target HTTP endpoint                                             |
+| `method`                | `str`            | `"GET"`   | One of: GET, POST, PUT, PATCH, DELETE, HEAD | HTTP method                                                      |
+| `headers`               | `dict[str, str]` | `{}`      | —                                           | Static request headers                                           |
+| `tags`                  | `list[str]`      | `[]`      | max 20 items                                | User-defined tags for grouping                                   |
+| `input_schema`          | `dict \| None`   | `None`    | Valid JSON Schema object                    | Validates input params before dispatch                           |
+| `output_schema`         | `dict \| None`   | `None`    | Valid JSON Schema object                    | Describes expected response shape                                |
+| `api_key_hash`          | `str \| None`    | `None`    | bcrypt hash                                 | Reserved for future access control                               |
+| `retry_max_attempts`    | `int \| None`    | `None`    | 1–10 when set                               | Max retries on transient failures; uses app default when omitted |
+| `retry_backoff_seconds` | `float`          | `1.0`     | 0 < x ≤ 60                                  | Initial backoff for exponential retry                            |
+| `timeout_seconds`       | `float \| None`  | `None`    | 0 < x ≤ 300 when set                        | Per-request timeout; uses app default when omitted               |
+| `created_at`            | `datetime`       | now (UTC) | —                                           | Registration timestamp                                           |
+| `updated_at`            | `datetime`       | now (UTC) | —                                           | Last update timestamp                                            |
 
 Notes:
 
@@ -196,33 +204,33 @@ Return value from `HttpDispatcher.invoke()`. Never raises.
 
 ## 4. MCP tools
 
-### 4.1 Management tools (always available)
+### 4.1 Management tools (built-in)
 
-#### `adaptor_register_tool`
+#### `http2mcp_register_tool`
 
 Registers a new HTTP API endpoint as an MCP tool. The tool is immediately callable and persisted.
 
 **Input (`RegisterToolInput`):**
 
-| Param                   | Type        | Required | Description                        |
-| ----------------------- | ----------- | -------- | ---------------------------------- |
-| `name`                  | `str`       | Yes      | Unique tool name (snake_case)      |
-| `description`           | `str`       | Yes      | What the tool does                 |
-| `url`                   | `str`       | Yes      | Target URL                         |
-| `method`                | `str`       | No       | HTTP method (default `GET`)        |
-| `headers`               | `dict`      | No       | Static headers                     |
-| `tags`                  | `list[str]` | No       | Grouping tags                      |
-| `input_schema`          | `dict`      | No       | JSON Schema for input validation   |
-| `output_schema`         | `dict`      | No       | JSON Schema for output description |
+| Param                   | Type        | Required | Description                         |
+| ----------------------- | ----------- | -------- | ----------------------------------- |
+| `name`                  | `str`       | Yes      | Unique tool name (snake_case)       |
+| `description`           | `str`       | Yes      | What the tool does                  |
+| `url`                   | `str`       | Yes      | Target URL                          |
+| `method`                | `str`       | No       | HTTP method (default `GET`)         |
+| `headers`               | `dict`      | No       | Static headers                      |
+| `tags`                  | `list[str]` | No       | Grouping tags                       |
+| `input_schema`          | `dict`      | No       | JSON Schema for input validation    |
+| `output_schema`         | `dict`      | No       | JSON Schema for output description  |
 | `retry_max_attempts`    | `int`       | No       | 1–10; uses app default when omitted |
-| `retry_backoff_seconds` | `float`     | No       | >0 (default 1.0)                   |
-| `timeout_seconds`       | `float`     | No       | >0; uses app default when omitted  |
+| `retry_backoff_seconds` | `float`     | No       | >0 (default 1.0)                    |
+| `timeout_seconds`       | `float`     | No       | >0; uses app default when omitted   |
 
 **Returns:** JSON `{ success, tool_name, message }` or `{ success: false, error }`.
 
 ---
 
-#### `adaptor_delete_tool`
+#### `http2mcp_delete_tool`
 
 Removes a registered tool by name from the registry and disk.
 
@@ -231,7 +239,7 @@ Removes a registered tool by name from the registry and disk.
 
 ---
 
-#### `adaptor_list_tools`
+#### `http2mcp_list_tools`
 
 Returns a paginated list of registered tools with live call-count from metrics.
 
@@ -250,7 +258,7 @@ The summary output intentionally excludes stored headers and schemas so the disc
 
 ---
 
-#### `adaptor_get_metrics`
+#### `http2mcp_get_metrics`
 
 Returns all per-tool invocation stats. Resets on server restart.
 
@@ -259,7 +267,7 @@ Returns all per-tool invocation stats. Resets on server restart.
 
 ---
 
-#### `adaptor_import_openapi`
+#### `http2mcp_import_openapi`
 
 Bulk-imports HTTP API tools from an OpenAPI 3.x spec file (JSON or YAML). Skips duplicate names.
 
@@ -275,18 +283,20 @@ Bulk-imports HTTP API tools from an OpenAPI 3.x spec file (JSON or YAML). Skips 
 
 ---
 
-#### `adaptor_export_openapi`
+#### `http2mcp_export_openapi`
 
 Exports all registered tools as an OpenAPI 3.1 spec.
 
 **Input (`ExportOpenAPIInput`):**
 
-| Param      | Type  | Description                                      |
-| ---------- | ----- | ------------------------------------------------ |
-| `base_url` | `str` | Server URL (default `https://gateway.localhost`) |
-| `title`    | `str` | API title (default `http-adaptor MCP Tools`)     |
+| Param      | Type  | Description                              |
+| ---------- | ----- | ---------------------------------------- |
+| `base_url` | `str` | Server URL (default `https://localhost`) |
+| `title`    | `str` | API title (default `http2mcp MCP Tools`) |
 
 **Returns:** OpenAPI 3.1 spec serialized as a JSON string.
+
+There is no built-in `http2mcp_update_tool` yet. Updating a tool definition requires deleting it and registering it again.
 
 ---
 
@@ -317,6 +327,7 @@ Uses `tenacity` with exponential backoff. Retries on:
 - `httpx.TimeoutException`
 - `httpx.ConnectError`
 - HTTP 5xx responses
+- HTTP 429 Too Many Requests
 
 Retry count is resolved from the explicit tool override when present, otherwise from the app-level `retry_max_attempts` default. Backoff remains controlled per-tool via `retry_backoff_seconds`.
 
@@ -343,7 +354,7 @@ All errors (network, HTTP status, validation) are converted to plain-language st
 
 ### 6.1 Registry file
 
-Tools are stored in a single JSON file (`~/.http_adaptor/tools.json` by default, overridable through the resolved config sources).
+Tools are stored in a single JSON file (`<work_dir>/tools.json` by default, derived from the resolved config sources).
 
 Writes use **write-then-rename** (`tempfile.mkstemp` + `Path.replace`) to prevent corruption on crash.
 
@@ -351,7 +362,7 @@ The stored payload contains the full `ToolDefinition`, including static headers.
 
 ### 6.2 Metrics
 
-Metrics are **in-memory only** and reset on server restart. Disk persistence is planned (see §8 TODO).
+Metrics are reloaded from `<work_dir>/metrics.json` during startup and saved back on graceful shutdown. Abrupt process termination can still lose the most recent in-memory samples.
 
 ---
 
@@ -362,7 +373,7 @@ Selectable at startup via `--transport` flag:
 | Flag                          | Transport       | Use case                            |
 | ----------------------------- | --------------- | ----------------------------------- |
 | `--transport stdio` (default) | Stdio           | Local use — VS Code, Claude Desktop |
-| `--transport http`            | Streamable HTTP | Remote / multi-client deployment    |
+| `--transport sse`            | Streamable HTTP | Remote / multi-client deployment    |
 
 `host` and `port` are passed to the `FastMCP` constructor (default `127.0.0.1:8000`).  
 HTTP path: `/mcp`.
@@ -371,46 +382,33 @@ HTTP path: `/mcp`.
 
 ## 8. Todo / Open questions
 
-- [ ] **T-01: Metrics persistence**
-    Persist `MetricsCollector` state to `metrics.json` on graceful shutdown and reload on startup.
-    Priority: Medium.
-    Note: metrics currently reset on every restart.
+- [ ] **T-02: Access control**  
+    Priority: High.  
 
-- [ ] **T-02: Access control**
-    Wire up `api_key_hash` with bcrypt verification on incoming gateway calls.
-    Priority: High.
-    Note: the field exists in `ToolDefinition`, and `bcrypt` is already a dependency.
-
-- [ ] **T-03: Structured call log**
-    Record per-invocation log entries for debugging and audit.
-    Priority: Low.
+- [ ] **T-03: Structured call log**  
+    Record per-invocation log entries for debugging and audit.  
+    Priority: Low.  
     Note: this comes from draft requirement 7.
 
-- [ ] **T-04: Update tool**
-    Add `adaptor_update_tool` so users can patch individual fields without delete and re-register.
-    Priority: Medium.
-    Note: there is no update path today.
+- [ ] **T-04: Update tool**  
+    Add `http2mcp_update_tool` so users can patch individual fields without delete and re-register.  
+    Priority: Medium.  
 
-- [ ] **T-05: Concurrency and thread safety**
-    Decide whether the registry and metrics collector need stronger thread-safety guarantees for future deployment modes.
-    Priority: Low.
+- [ ] **T-05: Concurrency and thread safety**  
+    Decide whether the registry and metrics collector need stronger thread-safety guarantees for future deployment modes.  
+    Priority: Low.  
     Note: the current single-process asyncio server is acceptable.
 
-- [ ] **T-06: Secret storage strategy**
-    Replace plain-text storage of static auth headers with secret references or another secure storage approach.
-    Priority: High.
-    Note: the current registry persists `headers` directly to disk.
-
-- [ ] **T-07: OpenAPI v2 support**
-    Add Swagger 2.0 compatibility.
-    Priority: Low.
+- [ ] **T-07: OpenAPI v2 support**  
+    Add Swagger 2.0 compatibility.  
+    Priority: Low.  
     Note: only OpenAPI 3.x is validated today.
 
 ---
 
 ## 9. Non-Goals (Phase 1)
 
-- Authentication of MCP clients connecting to `http-adaptor` itself.
+- Authentication of MCP clients connecting to `http2mcp` itself.
 - Multi-process or distributed registry.
 - Secret vault integration or secret rotation workflows.
 - Rate limiting of outbound HTTP calls.
@@ -422,4 +420,4 @@ HTTP path: `/mcp`.
 
 - [guide.md](./guide.md) — beginner-friendly usage guide
 - [draft.md](./draft.md) — requirement status and open gaps
-- [mcp_servers/http_adaptor/README.md](../../mcp_servers/http_adaptor/README.md) — package README with setup and usage
+- [README.md](../README.md) — package README with setup and usage

@@ -105,9 +105,7 @@ class ToolDefinition(BaseModel):
     )
     timeout_seconds: float | None = Field(
         default=None,
-        description=(
-            "Request timeout in seconds. When omitted, the app-level default is used."
-        ),
+        description=("Request timeout in seconds. When omitted, the app-level default is used."),
         gt=0,
         le=300.0,
     )

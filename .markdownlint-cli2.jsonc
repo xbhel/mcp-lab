@@ -1,0 +1,8 @@
+{
+    "config": {
+        "extends": ".markdownlint.json"
+    },
+    "ignores": [
+        "skills/skill-creator/**"
+    ]
+}

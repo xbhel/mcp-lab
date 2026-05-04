@@ -4,26 +4,26 @@ from pathlib import Path
 
 import pytest
 
-from http_adaptor.config import load_mcp_config
+from http2mcp.config import load_mcp_config
 
 
 def test_load_mcp_config_should_return_typed_config_from_toml(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    storage_path = tmp_path / "from-file-tools.json"
+    work_dir = tmp_path / "from-file"
     config_path = tmp_path / "config.toml"
-    os_environ_storage = "HTTP_ADAPTOR_TEST_STORAGE_PATH"
-    os_environ_host = "HTTP_ADAPTOR_TEST_HOST"
+    os_environ_work_dir = "http2mcp_TEST_WORK_DIR"
+    os_environ_host = "http2mcp_TEST_HOST"
 
     # Placeholder values are expanded from the environment before TOML parsing.
-    monkeypatch.setenv(os_environ_storage, str(storage_path))
+    monkeypatch.setenv(os_environ_work_dir, str(work_dir))
     monkeypatch.setenv(os_environ_host, "127.0.0.10")
     config_path.write_text(
         "\n".join(
             [
                 "[mcp]",
-                f'storage_path = "${{{os_environ_storage}}}"',
+                f'work_dir = "${{{os_environ_work_dir}}}"',
                 'transport = "sse"',
                 f'host = "${{{os_environ_host}}}"',
                 "port = 8123",
@@ -36,7 +36,9 @@ def test_load_mcp_config_should_return_typed_config_from_toml(
 
     config = load_mcp_config(config_path)
 
-    assert config.storage_path == storage_path
+    assert config.work_dir == work_dir
+    assert config.tools_storage_path == work_dir / "tools.json"
+    assert config.metrics_storage_path == work_dir / "metrics.json"
     assert config.transport == "sse"
     assert config.host == "127.0.0.10"
     assert config.port == 8123
@@ -49,9 +51,9 @@ def test_load_mcp_config_should_raise_when_placeholder_env_var_is_missing(
 ) -> None:
     config_path = tmp_path / "config.toml"
     config_path.write_text(
-        'storage_path = "${HTTP_ADAPTOR_MISSING_ENV}"',
+        "[mcp]\nwork_dir = \"${http2mcp_MISSING_ENV}\"",
         encoding="utf-8",
     )
 
-    with pytest.raises(ValueError, match="HTTP_ADAPTOR_MISSING_ENV"):
+    with pytest.raises(ValueError, match="http2mcp_MISSING_ENV"):
         load_mcp_config(config_path)

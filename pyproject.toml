@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "http-adaptor-mcp"
+name = "http2mcp"
 version = "0.1.0"
 description = "An MCP server that turns any HTTP API into an MCP tool"
 readme = "README.md"
@@ -33,10 +33,10 @@ dev = [
 ]
 
 [project.scripts]
-http-adaptor = "http_adaptor.server:main"
+http2mcp = "http2mcp.server:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["http_adaptor"]
+packages = ["http2mcp"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -46,6 +46,7 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+exclude = [".agents"]
 
 [tool.ruff.lint]
 select = [
@@ -118,7 +119,7 @@ ignore = [
 ]
 
 [tool.coverage.run]
-source = ["http_adaptor"]
+source = ["http2mcp"]
 omit = ["tests/*"]
 
 [tool.coverage.report]
@@ -130,10 +131,14 @@ strict = true
 pretty = true
 show_error_codes = true
 warn_unreachable = false
-files = ["http_adaptor", "tests"]
+files = ["http2mcp", "tests"]
 exclude = "(?x)(^.agents/.*$)"
 
 [[tool.mypy.overrides]]
 module = ["tests.*"]
 disable_error_code = ["no-untyped-def"]
 disallow_untyped_defs = false
+
+[[tool.mypy.overrides]]
+module = ["yaml", "jsonschema"]
+ignore_missing_imports = true

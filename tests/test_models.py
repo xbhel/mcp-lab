@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from http_adaptor.models import InvokeResult, MetricEntry, ToolDefinition
+from http2mcp.models import InvokeResult, MetricEntry, ToolDefinition
 
 
 def test_tool_definition_should_raise_when_method_is_invalid() -> None:

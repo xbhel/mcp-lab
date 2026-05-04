@@ -1,12 +1,11 @@
-"""MetricsCollector — in-memory per-tool call metrics.
-
-Metrics are intentionally in-memory only for Phase 1.
-They reset on server restart. Persistence can be added in a later phase.
-"""
+"""MetricsCollector — in-memory per-tool call metrics with optional persistence."""
 
 from __future__ import annotations
 
-from http_adaptor.models import MetricEntry
+import json
+from pathlib import Path
+
+from http2mcp.models import MetricEntry
 
 
 class MetricsCollector:
@@ -15,8 +14,9 @@ class MetricsCollector:
     Suitable for single-process async MCP server use.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, storage_path: Path) -> None:
         self._data: dict[str, MetricEntry] = {}
+        self._storage_path = storage_path
 
     def record_call(self, tool_name: str, *, latency_ms: float, success: bool) -> None:
         """Record one invocation result for the given tool."""
@@ -44,3 +44,17 @@ class MetricsCollector:
     def reset(self) -> None:
         """Clear all collected metrics."""
         self._data.clear()
+
+    def save(self, path: Path) -> None:
+        """Persist all metrics to a JSON file at *path*."""
+        payload = {name: entry.model_dump() for name, entry in self._data.items()}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(payload), encoding="utf-8")
+        tmp.replace(path)
+
+    def load(self, path: Path) -> None:
+        """Restore metrics from a JSON file. Silently skips when the file is absent."""
+        if not path.exists():
+            return
+        raw = json.loads(path.read_text(encoding="utf-8"))
+        self._data = {name: MetricEntry.model_validate(entry) for name, entry in raw.items()}

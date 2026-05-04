@@ -9,9 +9,9 @@ import pytest
 import respx
 from httpx import Response
 
-from http_adaptor.config import MCPConfig
-from http_adaptor.http_client import HttpDispatcher
-from http_adaptor.models import ToolDefinition
+from http2mcp.config import MCPConfig
+from http2mcp.http_client import HttpDispatcher
+from http2mcp.models import ToolDefinition
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -186,7 +186,7 @@ async def test_invoke_should_retry_on_5xx_and_succeed_on_second_attempt(
     )
     call_count = 0
 
-    def flaky_response(request):  # noqa: ANN001
+    def flaky_response(request):
         nonlocal call_count
         call_count += 1
         if call_count < 2:
@@ -289,7 +289,7 @@ async def test_send_request_should_use_app_default_timeout_when_tool_omits_timeo
         timeout_seconds=None,
     )
 
-    result = await dispatcher._send_request(tool, params={})
+    result = await dispatcher._send_request(tool, params={}, retries=0)
 
     assert result.is_success
     client.request.assert_awaited_once()
@@ -334,14 +334,132 @@ async def test_invoke_should_use_app_default_retry_count_when_tool_omits_retry_o
 
 
 def test_parse_body_should_return_dict_for_json_response() -> None:
-    from http_adaptor.http_client import _parse_body
+    from http2mcp.http_client import _parse_body
 
     resp = httpx.Response(200, json={"key": "val"})
     assert _parse_body(resp) == {"key": "val"}
 
 
 def test_parse_body_should_return_text_for_non_json_response() -> None:
-    from http_adaptor.http_client import _parse_body
+    from http2mcp.http_client import _parse_body
 
     resp = httpx.Response(200, text="plain")
     assert _parse_body(resp) == "plain"
+
+
+# ---------------------------------------------------------------------------
+# T-08: 429 retry handling
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_invoke_should_retry_on_429_rate_limit_response(
+    dispatcher: HttpDispatcher,
+) -> None:
+    """429 should be retried the same way as 5xx responses."""
+    tool = ToolDefinition(
+        name="rate_limited_v1",
+        description="Rate limited API",
+        url="https://limited.example.com/api",
+        method="GET",
+        retry_max_attempts=2,
+        retry_backoff_seconds=0.01,
+    )
+    call_count = 0
+
+    def rate_limited_response(request):
+        nonlocal call_count
+        call_count += 1
+        if call_count < 2:
+            return Response(429)
+        return Response(200, json={"ok": True})
+
+    respx.get("https://limited.example.com/api").mock(side_effect=rate_limited_response)
+    result = await dispatcher.invoke(tool, params={})
+    assert result.is_success
+    assert result.retries >= 1
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_invoke_should_return_rate_limited_error_after_exhausting_retries(
+    dispatcher: HttpDispatcher,
+) -> None:
+    """After exhausting all retries on 429, return a rate-limit error result."""
+    tool = ToolDefinition(
+        name="always_429_v1",
+        description="Always rate limited",
+        url="https://throttled.example.com/api",
+        method="GET",
+        retry_max_attempts=2,
+        retry_backoff_seconds=0.01,
+    )
+    respx.get("https://throttled.example.com/api").mock(return_value=Response(429))
+    result = await dispatcher.invoke(tool, params={})
+    assert not result.is_success
+    assert result.status_code == 429
+
+
+# ---------------------------------------------------------------------------
+# T-06: Secret header expansion
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_invoke_should_expand_env_var_references_in_headers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """${VAR_NAME} in header values should be resolved from environment variables."""
+    monkeypatch.setenv("MY_API_TOKEN", "secret-token-123")
+    client = MagicMock(spec=httpx.AsyncClient)
+    request = httpx.Request("GET", "https://auth.example.com/data")
+    client.request = AsyncMock(
+        return_value=Response(200, json={"ok": True}, request=request)
+    )
+    dispatcher = HttpDispatcher(client=client, config=MCPConfig())
+    tool = ToolDefinition(
+        name="auth_api_v1",
+        description="Auth API",
+        url="https://auth.example.com/data",
+        method="GET",
+        headers={"Authorization": "Bearer ${MY_API_TOKEN}"},
+        retry_max_attempts=1,
+    )
+
+    result = await dispatcher.invoke(tool, params={})
+
+    assert result.is_success
+    _, kwargs = client.request.call_args
+    assert kwargs["headers"]["Authorization"] == "Bearer secret-token-123"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_invoke_should_leave_header_unchanged_when_env_var_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """${MISSING_VAR} in a header should stay as-is when the variable is not set."""
+    monkeypatch.delenv("MISSING_SECRET", raising=False)
+    client = MagicMock(spec=httpx.AsyncClient)
+    request = httpx.Request("GET", "https://api.example.com/data")
+    client.request = AsyncMock(
+        return_value=Response(200, json={"ok": True}, request=request)
+    )
+    dispatcher = HttpDispatcher(client=client, config=MCPConfig())
+    tool = ToolDefinition(
+        name="missing_env_v1",
+        description="Tool with missing env var",
+        url="https://api.example.com/data",
+        method="GET",
+        headers={"X-Token": "${MISSING_SECRET}"},
+        retry_max_attempts=1,
+    )
+
+    result = await dispatcher.invoke(tool, params={})
+
+    assert result.is_success
+    _, kwargs = client.request.call_args
+    assert kwargs["headers"]["X-Token"] == "${MISSING_SECRET}"
+

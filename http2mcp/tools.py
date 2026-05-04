@@ -1,16 +1,16 @@
-"""MCP tool handlers for http-adaptor.
+"""MCP tool handlers for http2mcp.
 
 This module registers all MCP tools using @mcp.tool. Each handler is a thin
 layer that validates inputs, delegates to the appropriate service module, and
 formats the response for LLM consumption.
 
 Tools:
-    adaptor_register_tool   — Register a new HTTP API as an MCP tool
-    adaptor_delete_tool     — Remove a registered tool by name
-    adaptor_list_tools      — List registered tools with optional tag filter
-    adaptor_get_metrics     — Retrieve per-tool call metrics
-    adaptor_import_openapi  — Import tools from an OpenAPI spec
-    adaptor_export_openapi  — Export all tools as an OpenAPI spec
+    http2mcp_register_tool   — Register a new HTTP API as an MCP tool
+    http2mcp_delete_tool     — Remove a registered tool by name
+    http2mcp_list_tools      — List registered tools with optional tag filter
+    http2mcp_get_metrics     — Retrieve per-tool call metrics
+    http2mcp_import_openapi  — Import tools from an OpenAPI spec
+    http2mcp_export_openapi  — Export all tools as an OpenAPI spec
 
 Dynamic tools (one per registered HTTP API) are added at startup via
 server.py, not here.
@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any
 
 from mcp.types import ToolAnnotations
 
-from http_adaptor.exceptions import DuplicateToolError, InvalidOpenAPISpecError, ToolNotFoundError
-from http_adaptor.models import (
+from http2mcp.exceptions import DuplicateToolError, InvalidOpenAPISpecError, ToolNotFoundError
+from http2mcp.models import (
     DeleteToolInput,
     ExportOpenAPIInput,
     ImportOpenAPIInput,
@@ -33,14 +33,14 @@ from http_adaptor.models import (
     RegisterToolInput,
     ToolDefinition,
 )
-from http_adaptor.openapi import export_tools_as_openapi, import_tools_from_openapi
+from http2mcp.openapi import export_tools_as_openapi, import_tools_from_openapi
 
 if TYPE_CHECKING:
     from mcp.server.fastmcp import FastMCP
 
-    from http_adaptor.http_client import HttpDispatcher
-    from http_adaptor.metrics import MetricsCollector
-    from http_adaptor.registry import ToolRegistry
+    from http2mcp.http_client import HttpDispatcher
+    from http2mcp.metrics import MetricsCollector
+    from http2mcp.registry import ToolRegistry
 
 
 
@@ -58,7 +58,7 @@ def register_mcp_tools(
     """Register all management tools on the given FastMCP instance."""
 
     @mcp.tool(
-        name="adaptor_register_tool",
+        name="http2mcp_register_tool",
         annotations=ToolAnnotations(
             title="Register HTTP API as MCP Tool",
             readOnlyHint=False,
@@ -67,7 +67,7 @@ def register_mcp_tools(
             openWorldHint=False,
         ),
     )
-    async def adaptor_register_tool(params: RegisterToolInput) -> str:
+    async def http2mcp_register_tool(params: RegisterToolInput) -> str:
         """Register a new HTTP API endpoint as an MCP tool.
 
         After registration, the tool becomes immediately available for invocation
@@ -102,7 +102,7 @@ def register_mcp_tools(
             )
 
     @mcp.tool(
-        name="adaptor_delete_tool",
+        name="http2mcp_delete_tool",
         annotations=ToolAnnotations(
             title="Delete Registered MCP Tool",
             readOnlyHint=False,
@@ -111,7 +111,7 @@ def register_mcp_tools(
             openWorldHint=False,
         ),
     )
-    async def adaptor_delete_tool(params: DeleteToolInput) -> str:
+    async def http2mcp_delete_tool(params: DeleteToolInput) -> str:
         """Remove a registered HTTP API tool by name.
 
         The tool is immediately removed from the MCP tool list and its
@@ -138,7 +138,7 @@ def register_mcp_tools(
             return json.dumps({"success": False, "error": str(exc)}, indent=2)
 
     @mcp.tool(
-        name="adaptor_list_tools",
+        name="http2mcp_list_tools",
         annotations=ToolAnnotations(
             title="List Registered MCP Tools",
             readOnlyHint=True,
@@ -147,7 +147,7 @@ def register_mcp_tools(
             openWorldHint=False,
         ),
     )
-    async def adaptor_list_tools(params: ListToolsInput) -> str:
+    async def http2mcp_list_tools(params: ListToolsInput) -> str:
         """List all registered HTTP API tools with optional tag filtering.
 
         Returns a paginated list including tool name, description, URL,
@@ -192,7 +192,7 @@ def register_mcp_tools(
         )
 
     @mcp.tool(
-        name="adaptor_get_metrics",
+        name="http2mcp_get_metrics",
         annotations=ToolAnnotations(
             title="Get Tool Call Metrics",
             readOnlyHint=True,
@@ -201,7 +201,7 @@ def register_mcp_tools(
             openWorldHint=False,
         ),
     )
-    async def adaptor_get_metrics() -> str:
+    async def http2mcp_get_metrics() -> str:
         """Return per-tool invocation metrics.
 
         Metrics include: call count, success count, error count,
@@ -224,7 +224,7 @@ def register_mcp_tools(
         return json.dumps(data, indent=2)
 
     @mcp.tool(
-        name="adaptor_import_openapi",
+        name="http2mcp_import_openapi",
         annotations=ToolAnnotations(
             title="Import Tools from OpenAPI Spec",
             readOnlyHint=False,
@@ -233,7 +233,7 @@ def register_mcp_tools(
             openWorldHint=True,
         ),
     )
-    async def adaptor_import_openapi(params: ImportOpenAPIInput) -> str:
+    async def http2mcp_import_openapi(params: ImportOpenAPIInput) -> str:
         """Import HTTP API tools from an OpenAPI 3.x specification file.
 
         Parses the spec and auto-registers each operation as an MCP tool.
@@ -283,7 +283,7 @@ def register_mcp_tools(
         )
 
     @mcp.tool(
-        name="adaptor_export_openapi",
+        name="http2mcp_export_openapi",
         annotations=ToolAnnotations(
             title="Export Tools as OpenAPI Spec",
             readOnlyHint=True,
@@ -292,7 +292,7 @@ def register_mcp_tools(
             openWorldHint=False,
         ),
     )
-    async def adaptor_export_openapi(params: ExportOpenAPIInput) -> str:
+    async def http2mcp_export_openapi(params: ExportOpenAPIInput) -> str:
         """Export all registered tools as an OpenAPI 3.1 specification.
 
         Useful for integrating the gateway with other systems or generating
